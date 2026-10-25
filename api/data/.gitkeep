@@ -1,0 +1,3 @@
+# This folder is intentionally empty.
+# scripts/ingest.py writes taxonomy.json here at ingestion time.
+# taxonomy.json is NOT committed to git.

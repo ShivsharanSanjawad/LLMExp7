@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+pydantic>=2
+python-dotenv
+openai>=1.0,<2
+httpx
+langchain-core
+langchain-text-splitters
+langchain-huggingface
+langchain-qdrant
+qdrant-client
+langgraph
+sentence-transformers
+datasets
+pandas
+numpy
+mlflow
