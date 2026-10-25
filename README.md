@@ -147,15 +147,15 @@ Pipeline thresholds in `api/.env`:
 
 Full list with defaults: `api/app/config.py`.
 
-## Limitations
+## Observation table
 
-- The knowledge base comes from the Bitext insurance dataset (39 intents). Questions on topics outside those intents, such as insurance certificates, excess amounts or adding a second driver, return the fallback message. This is intended: the bot would rather say it does not know than guess.
-- Answer quality depends on the local model. Small models may paraphrase passages awkwardly, and the review step may reject some good answers.
-- Live account information is never available. The bot tells customers to log in or contact support.
+Results from testing the running API.
 
-## Troubleshooting
-
-- **`/ready` returns 503**: check that LM Studio's server is running and `LLM_BASE_URL` matches it, and that the Qdrant URL and key are correct.
-- **`Qdrant collection ... does not exist`**: run `uv run python -m scripts.ingest` from `api/`.
-- **401 from the API**: the `X-API-Key` header (or `API_KEY` in `ui/.env`) does not match `API_KEY` in `api/.env`.
-- **Many fallback answers**: check the sources in the response. If the top scores are below `SCORE_THRESHOLD`, the question is outside the knowledge base.
+| Test case | Expected result | Actual result | Pass/Fail |
+|---|---|---|---|
+| Health endpoint | API reports running | `GET /health` returned `{"status":"ok"}` (HTTP 200) | Pass |
+| Supported question | Grounded answer is returned | "How do I file a claim after a car accident?" returned a grounded answer (outcome `answered`, category CLAIMS, grounding 0.68) | Pass |
+| Unsupported question | Insufficient information/fallback | "What is the excess amount on my home insurance claim?" fell back on one run and returned a drafted answer with a coverage note on another | Fail (inconsistent) |
+| Empty question | Validation error | Whitespace-only question returned HTTP 422 "question must not be empty" | Pass |
+| Backend unavailable | Controlled error; no secret details | With LM Studio stopped, `/ready` returned 503 and `/ask` returned 503 "The assistant is temporarily unavailable. Please try again later." in about 3 seconds, with no secrets | Pass |
+| Response-time measurement | Latency is recorded | Every response includes `latency_ms` (for example 7485 ms) | Pass |
