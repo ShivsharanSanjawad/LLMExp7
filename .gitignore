@@ -4,6 +4,5 @@ __pycache__/
 .venv/
 mlflow.db
 mlruns/
-observation_table_*.csv
 .chainlit/
 .files/
