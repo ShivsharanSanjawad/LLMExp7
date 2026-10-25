@@ -1,0 +1,178 @@
+{
+  "categories": [
+    "AUTO_INSURANCE",
+    "CLAIMS",
+    "COMPLAINTS",
+    "CONTACT",
+    "COVERAGE",
+    "ENROLLMENT",
+    "GENERAL_INFORMATION",
+    "HEALTH_INSURANCE",
+    "HOME_INSURANCE",
+    "INCIDENTS",
+    "LIFE_INSURANCE",
+    "PAYMENT",
+    "PET_INSURANCE",
+    "POLICY",
+    "QUOTE",
+    "RENEW",
+    "TRAVEL_INSURANCE"
+  ],
+  "intents": [
+    "accept_settlement",
+    "agent",
+    "appeal_denied_insurance_claim",
+    "buy_insurance_policy",
+    "calculate_insurance_quote",
+    "cancel_insurance_policy",
+    "cancellation_fees",
+    "change_coverage",
+    "change_personal_details",
+    "check_coverage",
+    "check_payments",
+    "check_rates",
+    "compare_insurance_policies",
+    "customer_service",
+    "dispute_invoice",
+    "downgrade_coverage",
+    "file_claim",
+    "file_complaint",
+    "general_information",
+    "human_agent",
+    "information_auto_insurance",
+    "information_health_insurance",
+    "information_home_insurance",
+    "information_life_insurance",
+    "information_pet_insurance",
+    "information_travel_insurance",
+    "insurance_representative",
+    "negotiate_settlement",
+    "pay",
+    "payment_methods",
+    "receive_payment",
+    "reject_settlement",
+    "renew_insurance_policy",
+    "report_incident",
+    "report_payment_issue",
+    "schedule_appointment",
+    "schedule_payments",
+    "track_claim",
+    "upgrade_coverage"
+  ],
+  "intents_by_category": {
+    "AUTO_INSURANCE": [
+      "information_auto_insurance"
+    ],
+    "CLAIMS": [
+      "accept_settlement",
+      "file_claim",
+      "negotiate_settlement",
+      "receive_payment",
+      "reject_settlement",
+      "track_claim"
+    ],
+    "COMPLAINTS": [
+      "appeal_denied_insurance_claim",
+      "dispute_invoice",
+      "file_complaint"
+    ],
+    "CONTACT": [
+      "agent",
+      "customer_service",
+      "human_agent",
+      "insurance_representative"
+    ],
+    "COVERAGE": [
+      "change_coverage",
+      "check_coverage",
+      "downgrade_coverage",
+      "upgrade_coverage"
+    ],
+    "ENROLLMENT": [
+      "buy_insurance_policy",
+      "cancel_insurance_policy",
+      "cancellation_fees",
+      "compare_insurance_policies"
+    ],
+    "GENERAL_INFORMATION": [
+      "general_information"
+    ],
+    "HEALTH_INSURANCE": [
+      "information_health_insurance"
+    ],
+    "HOME_INSURANCE": [
+      "information_home_insurance"
+    ],
+    "INCIDENTS": [
+      "report_incident",
+      "schedule_appointment"
+    ],
+    "LIFE_INSURANCE": [
+      "information_life_insurance"
+    ],
+    "PAYMENT": [
+      "check_payments",
+      "pay",
+      "payment_methods",
+      "report_payment_issue",
+      "schedule_payments"
+    ],
+    "PET_INSURANCE": [
+      "information_pet_insurance"
+    ],
+    "POLICY": [
+      "change_personal_details"
+    ],
+    "QUOTE": [
+      "calculate_insurance_quote",
+      "check_rates"
+    ],
+    "RENEW": [
+      "renew_insurance_policy"
+    ],
+    "TRAVEL_INSURANCE": [
+      "information_travel_insurance"
+    ]
+  },
+  "example_question": {
+    "accept_settlement": "i got to accept fucking offers how do i do it",
+    "agent": "I would like to talk to the insurance company, how can I do it?",
+    "appeal_denied_insurance_claim": "wanna appeal some denied  claims can ya help me",
+    "buy_insurance_policy": "wamna buy a fucking health insurance policy how do i do it",
+    "calculate_insurance_quote": "i need a life insurance quote can cualculate it",
+    "cancel_insurance_policy": "I don't want to renew my insurance policy, hel me cancel it",
+    "cancellation_fees": "I want information about the early termination fees, how can I find it?",
+    "change_coverage": "I'd like to change the coverage of my life insurance policy, how do I do it?",
+    "change_personal_details": "can you help me modify the personal information?",
+    "check_coverage": "I'd like to check the coverage of my insurance policy, where could I do it?",
+    "check_payments": "I'd like to check my payments to the pet insurance cojpany",
+    "check_rates": "i want informatiion about the fucking pet insurance rates where can i find it",
+    "compare_insurance_policies": "I'm looking for information about the fucking different auto insurance policies, I need assistance",
+    "customer_service": "I would like to call fucking client service, where couldc I do it?",
+    "dispute_invoice": "i got to appeal a fucking invoice where do i do it",
+    "downgrade_coverage": "I have to downgrade my coverage, help me",
+    "file_claim": "need to make some fucking life insurancee where to do it",
+    "file_complaint": "need to make a consumer comnplaint",
+    "general_information": "i need information aboiut ur fucking insurances where could i find it",
+    "human_agent": "I need to talk to a fucking human agent, could I get some help?",
+    "information_auto_insurance": "I would like to know about my fuucking auto insurance, give me some information",
+    "information_health_insurance": "I want information about my fucking health insurance, where can I find it?",
+    "information_home_insurance": "I want to know more about my home insurance",
+    "information_life_insurance": "I'm looking for information about my fucking life insurance, where could I get it?",
+    "information_pet_insurance": "I'm looking for information about  my fucking pet insurance how could i find it",
+    "information_travel_insurance": "I would like information about my fucking travel insurance, how colud I find it?",
+    "insurance_representative": "I got to speak with my insurance representative, I need help",
+    "negotiate_settlement": "I want to negotiate fucknig settlements, where to do it?",
+    "pay": "help  me making fucking transfers",
+    "payment_methods": "wanna pay with an debit card how could i do it",
+    "receive_payment": "I have to receive payments, where can I do it?",
+    "reject_settlement": "i want help to reject a settlement offer",
+    "renew_insurance_policy": "my insurance policy will expire soon how could i renew it",
+    "report_incident": "I got to report fucking inncidents, where could I do it?",
+    "report_payment_issue": "I can't make payments, I need help notifying of payment issues",
+    "schedule_appointment": "I got to set up a fucking appointment with a professional , I need help",
+    "schedule_payments": "I would like to schedule th payments, where could I do it?",
+    "track_claim": "I'd like to monitor insurance clams",
+    "upgrade_coverage": "I need to upgrademy coverage, how to do it?"
+  }
+}

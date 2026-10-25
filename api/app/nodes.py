@@ -9,8 +9,8 @@ from . import config, retrieval, taxonomy
 from .guards import (CARD_RE, CREDENTIAL_REFUSAL, CRED_REQUEST_RE, FALLBACK_MESSAGE, LIVE_CLAIM_RE,
                      LIVE_REPLY, LIVE_RE, OUT_OF_SCOPE_REPLY, RESET_RE, SMALLTALK_REPLY)
 from .llm import llm_chat
-from .structured import classify, run_draft, with_retries
-from .utils import dedupe_by_intent, humanize, sentence_split
+from .structured import classify, run_coverage, run_draft, with_retries
+from .utils import dedupe_by_intent, humanize, sentence_split, strip_markdown, ungrounded_claims
 
 
 class SupportState(TypedDict, total=False):
@@ -27,6 +27,8 @@ class SupportState(TypedDict, total=False):
     can_answer: bool
     grounding: float
     review: str
+    unsupported_claims: List[str]
+    uncovered_parts: List[str]
     retry_count: int
     final_answer: str
     clarified: bool
@@ -160,7 +162,7 @@ def review_answer(state: SupportState):
     grounding, review = 0.0, "insufficient"
 
     if state.get("can_answer") and draft and "INSUFFICIENT_CONTEXT" not in draft and not LIVE_CLAIM_RE.search(draft):
-        sents = sentence_split(draft)
+        sents = sentence_split(strip_markdown(draft))
         pass_sents = []
         for c in state.get("context", []):
             pass_sents.extend(sentence_split(c, min_words=2) or [c])
@@ -170,15 +172,38 @@ def review_answer(state: SupportState):
             grounding = float((sv @ pv.T).max(axis=1).min())   # weakest sentence decides
             review = "supported" if grounding >= config.GROUNDING_MIN else "insufficient"
 
-    out = {"path": path, "review": review, "grounding": round(grounding, 3)}
+    unsupported = ungrounded_claims(strip_markdown(draft), state.get("context", [])) if review == "supported" else []
+    if unsupported:
+        review = "insufficient"   # a number or fee claim that no passage states is never shown
+
+    out = {"path": path, "review": review, "grounding": round(grounding, 3), "unsupported_claims": unsupported}
     if review == "supported":
         out["final_answer"] = draft.strip()
     return out
 
 
+def check_coverage(state: SupportState):
+    """Model checks each fact the customer asked for against the passages; uncovered facts get a plain note."""
+    path = state.get("path", []) + ["check_coverage"]
+    question = state.get("search_query") or state["question"]
+    passages = "\n".join(f"- {c}" for c in state.get("context", []))
+    user = f"Customer question: {question}\n\nApproved passages:\n{passages}"
+    res = with_retries(lambda: run_coverage(user))
+    parts = res.parts if res else []
+    missing = [p.part for p in parts if not p.covered]
+    if not missing:
+        return {"path": path, "uncovered_parts": []}
+    if len(missing) == len(parts):   # none of the facts asked for are in the passages: the topic is wrong
+        return {"path": path, "uncovered_parts": missing, "review": "insufficient",
+                "final_answer": FALLBACK_MESSAGE}
+    note = ("The help content does not cover: " + "; ".join(missing)
+            + ". Please contact our support team for these details.")
+    return {"path": path, "uncovered_parts": missing, "final_answer": f"{state['final_answer']}\n\n{note}"}
+
+
 def route_after_review(state: SupportState):
     if state.get("review") == "supported":
-        return END
+        return "check_coverage"
     return "rewrite_query" if state.get("retry_count", 0) < config.MAX_RETRIES else "fallback"
 
 

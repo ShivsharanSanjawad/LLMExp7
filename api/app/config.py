@@ -23,7 +23,7 @@ LLM_BASE_URL = _str("LLM_BASE_URL", "http://localhost:1234/v1")
 LLM_MODEL = _str("LLM_MODEL")
 LLM_API_KEY = _str("LLM_API_KEY", "lm-studio")
 LLM_TIMEOUT_S = _float("LLM_TIMEOUT_S", 120)
-GEN_TOKENS = _int("GEN_TOKENS", 300)
+GEN_TOKENS = _int("GEN_TOKENS", 1024)
 
 # ---- Qdrant Cloud ----
 QDRANT_URL = _str("QDRANT_URL")

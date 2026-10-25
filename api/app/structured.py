@@ -1,17 +1,17 @@
-"""LLM structured output: Pydantic schema + LangChain PydanticOutputParser (same method as Experiment 6)."""
-import difflib
-import json
+"""LLM structured output via ChatOpenAI.with_structured_output(method="json_schema").
+LM Studio enforces the JSON schema at the grammar/token level — output is always valid.
+"""
 import logging
-import re
-from typing import Literal
+from functools import lru_cache
+from typing import List, Literal
 
-from langchain_core.output_parsers import PydanticOutputParser
-from langchain_core.runnables import RunnableLambda
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+from openai import APIConnectionError, APIError, APITimeoutError
 from pydantic import BaseModel, Field, create_model
 
 from . import config, taxonomy
 from .errors import BackendUnavailable
-from .llm import llm_chat
 
 log = logging.getLogger("structured")
 
@@ -19,13 +19,29 @@ SPECIAL = ["smalltalk", "out_of_scope", "unclear"]
 CATEGORY_LABELS = taxonomy.CATEGORIES + SPECIAL
 INTENTS_BY_CATEGORY = taxonomy.INTENTS_BY_CATEGORY
 
+
+@lru_cache(maxsize=2)
+def _llm(max_tokens: int) -> ChatOpenAI:
+    """Cached ChatOpenAI instance keyed by max_tokens."""
+    return ChatOpenAI(
+        base_url=config.LLM_BASE_URL,
+        api_key=config.LLM_API_KEY,
+        model=config.LLM_MODEL,
+        temperature=0,
+        max_tokens=max_tokens,
+        max_retries=0,
+        timeout=config.LLM_TIMEOUT_S,
+    )
+
+
 CategoryChoice = create_model("CategoryChoice", category=(Literal[tuple(CATEGORY_LABELS)], ...))
-_intent_models = {}
+_intent_models: dict = {}
 
 
 def intent_model(cat):
     if cat not in _intent_models:
-        _intent_models[cat] = create_model(f"IntentChoice_{cat}", intent=(Literal[tuple(INTENTS_BY_CATEGORY[cat])], ...))
+        _intent_models[cat] = create_model(
+            f"IntentChoice_{cat}", intent=(Literal[tuple(INTENTS_BY_CATEGORY[cat])], ...))
     return _intent_models[cat]
 
 
@@ -34,39 +50,17 @@ class Draft(BaseModel):
     answer: str = Field(description="Answer using only the approved passages, or INSUFFICIENT_CONTEXT.")
 
 
-def snap_label(value, labels):
-    v = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
-    lower = {l.lower(): l for l in labels}
-    if v in lower:
-        return lower[v]
-    close = difflib.get_close_matches(v, list(lower), n=1, cutoff=0.75)
-    return lower[close[0]] if close else None
-
-
-def scan_label(raw, labels):
-    low = raw.lower()
-    for l in sorted(labels, key=len, reverse=True):
-        if l.lower() in low:
-            return l
-    return None
-
-
-def run_label(model_cls, field, labels, system, user, max_new_tokens=40):
-    parser = PydanticOutputParser(pydantic_object=model_cls)
-
-    def _run(u):
-        raw = llm_chat(system, u, max_new_tokens)
-        data = {}
-        m = re.search(r"\{.*\}", raw, re.S)
-        if m:
-            try:
-                data = json.loads(m.group(0))
-            except Exception:
-                data = {}
-        value = snap_label(data.get(field), labels) or scan_label(raw, labels)
-        return parser.parse(json.dumps({field: value}))  # validated against the Literal schema
-
-    return RunnableLambda(_run).invoke(user)
+def _invoke(schema, system: str, user: str, max_tokens: int):
+    """Call LLM with json_schema structured output. Raises BackendUnavailable on connection/server errors."""
+    try:
+        structured = _llm(max_tokens).with_structured_output(schema, method="json_schema")
+        return structured.invoke([SystemMessage(system), HumanMessage(user)])
+    except (APIConnectionError, APITimeoutError) as e:
+        raise BackendUnavailable("llm") from e
+    except APIError as e:
+        if e.status_code in (502, 503, 504):
+            raise BackendUnavailable("llm") from e
+        raise  # 400 etc. → propagate to with_retries
 
 
 def with_retries(fn):
@@ -89,13 +83,11 @@ CATEGORY_SYSTEM = (
     "smalltalk: greetings, thanks, chit-chat.\n"
     "out_of_scope: anything unrelated to insurance support (weather, sports, cooking, coding, general knowledge).\n"
     "unclear: insurance-related but too vague to tell what the customer wants (for example the single word 'insurance').\n"
-    'Reply with ONLY a JSON object like {"category": "<category>"}.'
 )
 
 
 def classify_category(q):
-    res = with_retries(lambda: run_label(CategoryChoice, "category", CATEGORY_LABELS, CATEGORY_SYSTEM,
-                                         f"Customer message: {q}"))
+    res = with_retries(lambda: _invoke(CategoryChoice, CATEGORY_SYSTEM, f"Customer message: {q}", max_tokens=40))
     return res.category if res else None
 
 
@@ -103,11 +95,12 @@ def classify_intent_in(q, cat):
     ints = INTENTS_BY_CATEGORY[cat]
     if len(ints) == 1:
         return ints[0]
-    system = (f"The customer message belongs to the category {cat}. Pick the ONE best intent.\n"
-              "Intents with an example question each:\n"
-              + "\n".join(f"{i}: e.g. {taxonomy.EXAMPLE_Q.get(i, '')}" for i in ints) + "\n"
-              'Reply with ONLY a JSON object like {"intent": "<intent>"}.')
-    res = with_retries(lambda: run_label(intent_model(cat), "intent", ints, system, f"Customer message: {q}"))
+    system = (
+        f"The customer message belongs to the category {cat}. Pick the ONE best intent.\n"
+        "Intents with an example question each:\n"
+        + "\n".join(f"{i}: e.g. {taxonomy.EXAMPLE_Q.get(i, '')}" for i in ints) + "\n"
+    )
+    res = with_retries(lambda: _invoke(intent_model(cat), system, f"Customer message: {q}", max_tokens=40))
     return res.intent if res else None
 
 
@@ -129,25 +122,42 @@ GEN_SYSTEM = (
     "- You cannot see customer accounts or live records.\n"
     "- Never ask for passwords, one-time codes or card details.\n"
     "- If the passages do not answer the question, set can_answer to false and answer to INSUFFICIENT_CONTEXT.\n"
-    "- Keep the answer under 80 words.\n"
-    'Reply with ONLY a JSON object: {"can_answer": true or false, "answer": "<text>"}.'
+    "- Write the answer in Markdown: short paragraphs, a numbered list for step-by-step procedures, "
+    "and bullet points for related items.\n"
+    "- When the passages list several options, items or attributes, present them as a Markdown table with a header row.\n"
+    "- Be complete: cover every relevant point the passages state. Do not pad.\n"
+    "- Only state facts the passages state. If they do not say whether a fee, charge, amount, deadline or condition "
+    "applies, say that the passages do not specify it and direct the customer to the support team.\n"
+    "- Never say that something has no fee, is free, or is not charged unless a passage says so.\n"
+    "- Answer every part of the customer question. If the question asks something the passages do not cover "
+    "(for example whether a fee applies), add one sentence saying the help content does not cover it and the "
+    "customer should contact the support team for that.\n"
 )
 
 
 def run_draft(user):
-    parser = PydanticOutputParser(pydantic_object=Draft)
+    """Single invocation; caller wraps in with_retries()."""
+    return _invoke(Draft, GEN_SYSTEM, user, max_tokens=config.GEN_TOKENS)
 
-    def _run(u):
-        raw = llm_chat(GEN_SYSTEM, u, config.GEN_TOKENS)
-        m = re.search(r"\{.*\}", raw, re.S)
-        if m:
-            try:
-                return parser.parse(m.group(0))
-            except Exception:
-                pass
-        m2 = re.search(r'"can_answer"\s*:\s*(true|false).*?"answer"\s*:\s*"(.*?)"\s*\}?\s*$', raw, re.S | re.I)
-        if m2:
-            return Draft(can_answer=m2.group(1).lower() == "true", answer=m2.group(2))
-        raise ValueError("unparseable draft")
 
-    return RunnableLambda(_run).invoke(user)
+class CoveragePart(BaseModel):
+    part: str = Field(description="One fact or sub-question the customer asks for, in a few words.")
+    covered: bool = Field(description="True only if the passages explicitly state this fact.")
+
+
+class Coverage(BaseModel):
+    parts: List[CoveragePart] = Field(description="At most 4 parts. Empty if the question asks for no specific fact.")
+
+
+COVERAGE_SYSTEM = (
+    "You check whether help-content passages answer a customer question.\n"
+    "Split the question into the specific facts it asks for. Write each part as a short noun phrase, "
+    "for example 'the early termination fee amount' or 'the claim approval timeline'. "
+    "Mark each part covered only if the passages explicitly state that fact. "
+    "Passages that only mention a topic in general do not cover a specific fact.\n"
+)
+
+
+def run_coverage(user):
+    """Single invocation; caller wraps in with_retries()."""
+    return _invoke(Coverage, COVERAGE_SYSTEM, user, max_tokens=config.GEN_TOKENS)
