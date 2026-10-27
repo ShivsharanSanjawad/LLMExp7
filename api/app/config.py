@@ -52,10 +52,7 @@ MAX_SESSIONS = _int("MAX_SESSIONS", 500)
 
 # ---- API ----
 API_KEY = _str("API_KEY")  # empty = API key check disabled
-QUEUE_TIMEOUT_S = _float("QUEUE_TIMEOUT_S", 120)
 
-# ---- Parallel LLM requests (matches LM Studio's "Parallel" setting) ----
-LLM_PARALLEL = _int("LLM_PARALLEL", 4)
 
 # ---- MLflow ----
 MLFLOW_TRACKING_URI = _str("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")

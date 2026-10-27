@@ -34,11 +34,11 @@ def init() -> None:
         log.warning("MLflow disabled (%s)", type(e).__name__)
 
 
-def log_request(status: str, latency_ms: float, graph_ms: Optional[float] = None, queue_ms: Optional[float] = None,
+def log_request(status: str, latency_ms: float, graph_ms: Optional[float] = None,
                 outcome: Optional[str] = None, category: Optional[str] = None, intent: Optional[str] = None,
                 grounding: Optional[float] = None, retry_count: int = 0, n_sources: int = 0,
                 n_history_messages: int = 0, session_tag: str = "", failed_component: Optional[str] = None) -> None:
-    """status is one of: ok, backend_unavailable, busy, error."""
+    """status is one of: ok, backend_unavailable, error."""
     client = _S["client"]
     if client is None:
         return
@@ -54,8 +54,6 @@ def log_request(status: str, latency_ms: float, graph_ms: Optional[float] = None
                                      "success": 1.0 if status == "ok" else 0.0}
         if graph_ms is not None:
             metrics["graph_ms"] = graph_ms
-        if queue_ms is not None:
-            metrics["queue_ms"] = queue_ms
         if grounding is not None:
             metrics["grounding"] = grounding
         for k, v in metrics.items():

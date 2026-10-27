@@ -2,11 +2,10 @@ import hashlib
 import hmac
 import json
 import logging
-import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, List, Optional
+from typing import Generator, List, Optional
 
 import mlflow
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Request
@@ -27,7 +26,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("api")
 
 UNAVAILABLE_MSG = "The assistant is temporarily unavailable. Please try again later."
-BUSY_MSG = "The assistant is busy. Please try again shortly."
 INTERNAL_MSG = "Internal server error."
 SESSION_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
 
@@ -39,17 +37,11 @@ async def lifespan(app: FastAPI):
     app.state.graph = build_graph()
     app.state.sessions = SessionStore(config.MAX_HISTORY_MESSAGES, config.HISTORY_MSG_CHARS,
                                       config.SESSION_TTL_S, config.MAX_SESSIONS)
-    # Semaphore allows up to LLM_PARALLEL concurrent graph runs (matches LM Studio's Parallel setting).
-    # Falls back to 1 if LLM_PARALLEL <= 0.
-    parallel = max(1, config.LLM_PARALLEL)
-    app.state.graph_lock = threading.Semaphore(parallel)
-    log.info("concurrency: up to %d parallel graph runs", parallel)
     tracking.init()
-    # Enable MLflow auto-tracing for LangChain/LangGraph — captures all node executions as spans.
     mlflow.set_tracking_uri(config.MLFLOW_TRACKING_URI)
     mlflow.set_experiment(config.MLFLOW_EXPERIMENT)
     mlflow.langchain.autolog()
-    log.info("MLflow LangGraph autolog enabled")
+    mlflow.openai.autolog()   # covers raw OpenAI client calls (condense_question) that LangChain autolog misses
     log.info("startup complete")
     yield
 
@@ -105,41 +97,54 @@ class AskResponse(BaseModel):
     latency_ms: int
 
 
-@app.get("/health")
-def health():
-    """Liveness only: the process is up. It does NOT check the LLM or Qdrant (see /ready)."""
-    return {"status": "ok"}
-
-
-@app.get("/ready")
-def ready():
+def dependency_status() -> JSONResponse:
+    """200 when Qdrant and the LLM are both reachable, otherwise 503 naming what is down."""
     q_ok = retrieval.qdrant_reachable()
     l_ok = llm_reachable()
-    body = {"status": "ready" if (q_ok and l_ok) else "not_ready",
+    body = {"status": "ok" if (q_ok and l_ok) else "unavailable",
             "qdrant": "ok" if q_ok else "unreachable", "llm": "ok" if l_ok else "unreachable"}
     return JSONResponse(status_code=200 if (q_ok and l_ok) else 503, content=body)
 
 
-@app.post("/ask", response_model=AskResponse, dependencies=[Depends(require_api_key)])
+class HealthOut(BaseModel):
+    status: str = Field(description="'ok' when Qdrant and the LLM are reachable, otherwise 'unavailable'.")
+    qdrant: str = Field(description="'ok' or 'unreachable'.")
+    llm: str = Field(description="'ok' or 'unreachable'.")
+
+
+HEALTH_RESPONSES = {503: {"model": HealthOut, "description": "Qdrant or the LLM is unreachable."}}
+
+
+@app.get("/health", response_model=HealthOut, responses=HEALTH_RESPONSES)
+def health():
+    """Reports whether the API can answer questions: checks Qdrant and the LLM."""
+    return dependency_status()
+
+
+@app.get("/ready", response_model=HealthOut, responses=HEALTH_RESPONSES)
+def ready():
+    """Same check as /health, kept for load balancers that call /ready."""
+    return dependency_status()
+
+
+ERROR_RESPONSES = {
+    401: {"description": "API key missing or wrong (only when API_KEY is set)."},
+    503: {"description": "Backend unavailable. Try again later."},
+}
+
+
+@app.post("/ask", response_model=AskResponse, dependencies=[Depends(require_api_key)],
+          responses={401: ERROR_RESPONSES[401], 503: ERROR_RESPONSES[503]})
 def ask(req: AskRequest, request: Request):
     started = time.perf_counter()
     session_id = req.session_id or uuid.uuid4().hex
     session_tag = hashlib.sha256(session_id.encode()).hexdigest()[:8]
     sessions: SessionStore = request.app.state.sessions
-    sem: threading.Semaphore = request.app.state.graph_lock
 
     def elapsed_ms() -> float:
         return (time.perf_counter() - started) * 1000
 
-    if not sem.acquire(timeout=config.QUEUE_TIMEOUT_S):
-        ms = elapsed_ms()
-        log.warning("ask busy latency_ms=%d session=%s", ms, session_tag)
-        tracking.log_request("busy", ms, session_tag=session_tag)
-        raise HTTPException(status_code=503, detail=BUSY_MSG, headers={"Retry-After": "5"})
-
-    queue_ms = elapsed_ms()
     history: list = []
-    graph_started = time.perf_counter()
     try:
         history = sessions.get_history(session_id)
         state = request.app.state.graph.invoke(
@@ -149,28 +154,23 @@ def ask(req: AskRequest, request: Request):
     except BackendUnavailable as e:
         ms = elapsed_ms()
         log.warning("ask backend_unavailable component=%s latency_ms=%d session=%s", e.component, ms, session_tag)
-        tracking.log_request("backend_unavailable", ms, queue_ms=queue_ms, n_history_messages=len(history),
+        tracking.log_request("backend_unavailable", ms, n_history_messages=len(history),
                              session_tag=session_tag, failed_component=e.component)
         raise HTTPException(status_code=503, detail=UNAVAILABLE_MSG, headers={"Retry-After": "10"})
     except Exception:
         ms = elapsed_ms()
         log.exception("ask unexpected_error latency_ms=%d session=%s", ms, session_tag)   # trace stays in server log
-        tracking.log_request("error", ms, queue_ms=queue_ms, n_history_messages=len(history), session_tag=session_tag)
+        tracking.log_request("error", ms, n_history_messages=len(history), session_tag=session_tag)
         raise HTTPException(status_code=500, detail=INTERNAL_MSG)
-    finally:
-        sem.release()
 
-    graph_ms = (time.perf_counter() - graph_started) * 1000
     outcome = outcome_of(state)
     latency_ms = elapsed_ms()
-
-    log.info("ask ok outcome=%s category=%s intent=%s latency_ms=%d graph_ms=%d session=%s",
-             outcome, state.get("category"), state.get("intent"), latency_ms, graph_ms, session_tag)
-    tracking.log_request("ok", latency_ms, graph_ms=graph_ms, queue_ms=queue_ms, outcome=outcome,
-                         category=state.get("category"), intent=state.get("intent"),
-                         grounding=state.get("grounding"), retry_count=state.get("retry_count", 0),
-                         n_sources=len(state.get("sources", [])), n_history_messages=len(history),
-                         session_tag=session_tag)
+    log.info("ask ok outcome=%s category=%s intent=%s latency_ms=%d session=%s",
+             outcome, state.get("category"), state.get("intent"), latency_ms, session_tag)
+    tracking.log_request("ok", latency_ms, outcome=outcome, category=state.get("category"),
+                         intent=state.get("intent"), grounding=state.get("grounding"),
+                         retry_count=state.get("retry_count", 0), n_sources=len(state.get("sources", [])),
+                         n_history_messages=len(history), session_tag=session_tag)
     return AskResponse(
         answer=answer, outcome=outcome, category=state.get("category"), intent=state.get("intent"),
         grounding=state.get("grounding"), rewritten_question=state.get("rewritten_question"),
@@ -178,107 +178,64 @@ def ask(req: AskRequest, request: Request):
         session_id=session_id, latency_ms=int(latency_ms))
 
 
-@app.post("/ask/stream", dependencies=[Depends(require_api_key)])
-async def ask_stream(req: AskRequest, request: Request):
-    """SSE endpoint. Streams pipeline step events then a final 'result' event with the full response JSON."""
+@app.post("/ask/stream", dependencies=[Depends(require_api_key)],
+          responses={401: ERROR_RESPONSES[401]})
+def ask_stream(req: AskRequest, request: Request):
+    """SSE endpoint. Streams one 'step' event per pipeline node, then a 'result' event with the full answer.
+
+    The HTTP status is 200 once the stream starts, so a failure after that is sent as an 'error' event
+    with code 503 (backend unavailable) or 500 (anything else)."""
     started = time.perf_counter()
     session_id = req.session_id or uuid.uuid4().hex
     session_tag = hashlib.sha256(session_id.encode()).hexdigest()[:8]
     sessions: SessionStore = request.app.state.sessions
-    sem: threading.Semaphore = request.app.state.graph_lock
 
     def elapsed_ms() -> float:
         return (time.perf_counter() - started) * 1000
 
-    async def event_stream() -> AsyncGenerator[str, None]:
-        if not sem.acquire(timeout=config.QUEUE_TIMEOUT_S):
-            yield f"event: error\ndata: {json.dumps({'code': 503, 'detail': BUSY_MSG})}\n\n"
-            return
-
-        queue_ms = elapsed_ms()
+    def event_stream() -> Generator[str, None, None]:
         history: list = []
-        graph_started = time.perf_counter()
-        state = None
+        initial = {"question": req.question, "history": [], "retry_count": 0, "path": []}
+        merged: dict = dict(initial)
         try:
             history = sessions.get_history(session_id)
-            initial = {"question": req.question, "history": history, "retry_count": 0, "path": []}
-
-            # Stream node-by-node using LangGraph's sync .stream() in the thread
-            import concurrent.futures
-            import asyncio
-
-            loop = asyncio.get_event_loop()
-            queue: asyncio.Queue = asyncio.Queue()
-
-            def run_graph():
-                try:
-                    for chunk in request.app.state.graph.stream(initial, stream_mode="updates"):
-                        for node_name in chunk:
-                            loop.call_soon_threadsafe(queue.put_nowait, ("step", node_name, chunk[node_name]))
-                    loop.call_soon_threadsafe(queue.put_nowait, ("done", None, None))
-                except Exception as exc:
-                    loop.call_soon_threadsafe(queue.put_nowait, ("error", str(exc), None))
-
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            fut = loop.run_in_executor(executor, run_graph)
-
-            # Accumulate state from updates
-            merged: dict = dict(initial)
-            while True:
-                kind, name, data = await queue.get()
-                if kind == "step":
+            initial["history"] = history
+            merged = dict(initial)
+            for chunk in request.app.state.graph.stream(initial, stream_mode="updates"):
+                for name, data in chunk.items():
                     merged.update(data)
                     payload = json.dumps({"node": name, "lines": describe(name, data),
                                           "update": data or {}, "state": merged}, default=str)
                     yield f"event: step\ndata: {payload}\n\n"
-                elif kind == "done":
-                    break
-                else:  # error
-                    yield f"event: error\ndata: {json.dumps({'code': 500, 'detail': name})}\n\n"
-                    return
-
-            await fut  # ensure executor is done
-            state = merged
-            answer = state.get("final_answer") or FALLBACK_MESSAGE
+            answer = merged.get("final_answer") or FALLBACK_MESSAGE
             sessions.add_turn(session_id, mask_cards(req.question), answer)
-
         except BackendUnavailable as e:
             ms = elapsed_ms()
-            sem.release()
             log.warning("stream backend_unavailable component=%s latency_ms=%d session=%s",
                         e.component, ms, session_tag)
-            tracking.log_request("backend_unavailable", ms, queue_ms=queue_ms,
-                                  n_history_messages=len(history), session_tag=session_tag,
-                                  failed_component=e.component)
+            tracking.log_request("backend_unavailable", ms, n_history_messages=len(history),
+                                 session_tag=session_tag, failed_component=e.component)
             yield f"event: error\ndata: {json.dumps({'code': 503, 'detail': UNAVAILABLE_MSG})}\n\n"
             return
         except Exception:
             ms = elapsed_ms()
-            sem.release()
             log.exception("stream unexpected_error latency_ms=%d session=%s", ms, session_tag)
-            tracking.log_request("error", ms, queue_ms=queue_ms,
-                                  n_history_messages=len(history), session_tag=session_tag)
+            tracking.log_request("error", ms, n_history_messages=len(history), session_tag=session_tag)
             yield f"event: error\ndata: {json.dumps({'code': 500, 'detail': INTERNAL_MSG})}\n\n"
             return
-        finally:
-            sem.release()
 
-        graph_ms = (time.perf_counter() - graph_started) * 1000
-        outcome = outcome_of(state)
+        outcome = outcome_of(merged)
         latency_ms = int(elapsed_ms())
-
         log.info("stream ok outcome=%s category=%s intent=%s latency_ms=%d session=%s",
-                 outcome, state.get("category"), state.get("intent"), latency_ms, session_tag)
-        tracking.log_request("ok", latency_ms, graph_ms=graph_ms, queue_ms=queue_ms, outcome=outcome,
-                             category=state.get("category"), intent=state.get("intent"),
-                             grounding=state.get("grounding"), retry_count=state.get("retry_count", 0),
-                             n_sources=len(state.get("sources", [])), n_history_messages=len(history),
-                             session_tag=session_tag)
-
+                 outcome, merged.get("category"), merged.get("intent"), latency_ms, session_tag)
+        tracking.log_request("ok", latency_ms, outcome=outcome, category=merged.get("category"),
+                             intent=merged.get("intent"), grounding=merged.get("grounding"),
+                             retry_count=merged.get("retry_count", 0), n_sources=len(merged.get("sources", [])),
+                             n_history_messages=len(history), session_tag=session_tag)
         result = AskResponse(
-            answer=answer, outcome=outcome, category=state.get("category"), intent=state.get("intent"),
-            grounding=state.get("grounding"), rewritten_question=state.get("rewritten_question"),
-            sources=state.get("sources", []), path=state.get("path", []),
+            answer=answer, outcome=outcome, category=merged.get("category"), intent=merged.get("intent"),
+            grounding=merged.get("grounding"), rewritten_question=merged.get("rewritten_question"),
+            sources=merged.get("sources", []), path=merged.get("path", []),
             session_id=session_id, latency_ms=latency_ms)
         yield f"event: result\ndata: {result.model_dump_json()}\n\n"
 
@@ -289,7 +246,10 @@ async def ask_stream(req: AskRequest, request: Request):
     )
 
 
-@app.delete("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
+@app.delete("/sessions/{session_id}", dependencies=[Depends(require_api_key)],
+            responses={401: ERROR_RESPONSES[401], 404: {"description": "No session with that id."}})
 def clear_session(request: Request,
                   session_id: str = Path(..., min_length=1, max_length=64, pattern=SESSION_ID_PATTERN)):
-    return {"cleared": request.app.state.sessions.clear(session_id)}
+    if not request.app.state.sessions.clear(session_id):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return {"cleared": True}

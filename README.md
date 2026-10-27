@@ -61,7 +61,6 @@ Key points:
 2. Open the **Developer** tab and start the server.
 3. Copy the model identifier into `LLM_MODEL` and the server address into `LLM_BASE_URL` in `api/.env`.
    The default address is `http://localhost:1234/v1`.
-4. Set **Parallel** to match `LLM_PARALLEL` (default 4).
 
 ### 2. API (folder: `api/`)
 
@@ -114,8 +113,8 @@ The API logs every graph run to MLflow (`MLFLOW_EXPERIMENT`, default `insurance-
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/health` | Liveness check. The process is up. |
-| GET | `/ready` | Checks Qdrant and LM Studio. Returns 503 if either is unreachable. |
+| GET | `/health` | Checks Qdrant and the LLM. Returns 200 when both are reachable, 503 otherwise. |
+| GET | `/ready` | Same check as `/health`, for load balancers. |
 | POST | `/ask` | Ask one question. Returns the answer, outcome, sources and pipeline path. |
 | POST | `/ask/stream` | Same as `/ask`, streamed as server-sent events with a step event per node. |
 | DELETE | `/sessions/{session_id}` | Clear a chat session's history. |
@@ -142,8 +141,6 @@ Pipeline thresholds in `api/.env`:
 | `SCORE_THRESHOLD` | 0.45 | Minimum top similarity score to use any passage |
 | `GROUNDING_MIN` | 0.60 | Minimum sentence-to-passage similarity for an answer to be shown |
 | `MAX_RETRIES` | 1 | Query rewrites before falling back |
-| `LLM_PARALLEL` | 4 | Concurrent graph runs |
-| `QUEUE_TIMEOUT_S` | 120 | How long a request waits for a free slot |
 
 Full list with defaults: `api/app/config.py`.
 
@@ -153,7 +150,7 @@ Results from testing the running API.
 
 | Test case | Expected result | Actual result | Pass/Fail |
 |---|---|---|---|
-| Health endpoint | API reports running | `GET /health` returned `{"status":"ok"}` (HTTP 200) | Pass |
+| Health endpoint | API reports running | `GET /health` returned `{"status":"ok","qdrant":"ok","llm":"ok"}` (HTTP 200) when both dependencies are up; with the LLM down it returns 503 | Pass |
 | Supported question | Grounded answer is returned | "How do I file a claim after a car accident?" returned a grounded answer (outcome `answered`, category CLAIMS, grounding 0.68) | Pass |
 | Unsupported question | Insufficient information/fallback | "What is the excess amount on my home insurance claim?" fell back on one run and returned a drafted answer with a coverage note on another | Fail (inconsistent) |
 | Empty question | Validation error | Whitespace-only question returned HTTP 422 "question must not be empty" | Pass |
