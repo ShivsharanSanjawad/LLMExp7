@@ -36,28 +36,32 @@ import threading
 GRAPH = None
 SESSIONS = None
 INIT_ERROR = None
+INIT_LOCK = threading.Lock()
 
 
 def get_pipeline():
     global GRAPH, SESSIONS, INIT_ERROR
     if GRAPH is not None and SESSIONS is not None:
         return GRAPH, SESSIONS
-    if INIT_ERROR is not None:
-        raise RuntimeError(INIT_ERROR)
-    try:
-        log.info("Checking configuration and initializing retrieval...")
-        config.check_serving_config()
-        retrieval.init()
-        GRAPH = build_graph()
-        SESSIONS = SessionStore(config.MAX_HISTORY_MESSAGES, config.HISTORY_MSG_CHARS,
-                                config.SESSION_TTL_S, config.MAX_SESSIONS)
-        log.info("LangGraph pipeline successfully loaded.")
-        return GRAPH, SESSIONS
-    except (Exception, SystemExit) as e:
-        INIT_ERROR = str(e)
-        log.error("Initialization error: %s", e)
-        print(f"CRITICAL INITIALIZATION ERROR: {e}", flush=True)
-        raise RuntimeError(str(e)) from e
+    with INIT_LOCK:
+        if GRAPH is not None and SESSIONS is not None:
+            return GRAPH, SESSIONS
+        if INIT_ERROR is not None:
+            raise RuntimeError(INIT_ERROR)
+        try:
+            log.info("Checking configuration and initializing retrieval...")
+            config.check_serving_config()
+            retrieval.init()
+            GRAPH = build_graph()
+            SESSIONS = SessionStore(config.MAX_HISTORY_MESSAGES, config.HISTORY_MSG_CHARS,
+                                    config.SESSION_TTL_S, config.MAX_SESSIONS)
+            log.info("LangGraph pipeline successfully loaded.")
+            return GRAPH, SESSIONS
+        except (Exception, SystemExit) as e:
+            INIT_ERROR = str(e)
+            log.error("Initialization error: %s", e)
+            print(f"CRITICAL INITIALIZATION ERROR: {e}", flush=True)
+            raise RuntimeError(str(e)) from e
 
 # ZeroGPU only accepts a Space that has at least one @spaces.GPU function. The pipeline itself needs no GPU
 # (LLM = hosted API, embeddings = CPU), so this is a never-called placeholder.
