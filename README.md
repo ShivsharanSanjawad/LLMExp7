@@ -1,3 +1,12 @@
+---
+title: Insurance Support Bot
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+app_file: space_app.py
+pinned: false
+---
+
 # Insurance Support Bot
 
 A customer-support chatbot for insurance questions. It answers only from a curated help knowledge base, checks every answer against the source passages before showing it, and falls back to a "contact support" message when it cannot find a reliable answer.
@@ -156,3 +165,30 @@ Results from testing the running API.
 | Empty question | Validation error | Whitespace-only question returned HTTP 422 "question must not be empty" | Pass |
 | Backend unavailable | Controlled error; no secret details | With LM Studio stopped, `/ready` returned 503 and `/ask` returned 503 "The assistant is temporarily unavailable. Please try again later." in about 3 seconds, with no secrets | Pass |
 | Response-time measurement | Latency is recorded | Every response includes `latency_ms` (for example 7485 ms) | Pass |
+
+## Deploying to Hugging Face Spaces (Gradio SDK, ZeroGPU)
+
+The Space runs `space_app.py` (Gradio) which calls the LangGraph pipeline in-process; FastAPI and Chainlit are not used there.
+
+1. Run `python -m scripts.ingest` locally once (fills Qdrant Cloud).
+2. Create a Gradio Space with ZeroGPU hardware, then add these in Settings:
+   - Secrets: `QDRANT_API_KEY`, `LLM_API_KEY`
+   - Variables: `QDRANT_URL`, `COLLECTION`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_STRUCTURED_METHOD=function_calling`
+3. Push this repo to the Space's git remote.
+
+## Deploying to Render (Free Web Service)
+
+1. Run `python -m scripts.ingest` locally once (fills Qdrant Cloud).
+2. Push this repo to GitHub.
+3. In Render Dashboard, click New + -> Web Service (or Blueprint using render.yaml).
+   - Runtime: Python 3
+   - Build Command: pip install -r requirements.txt
+   - Start Command: python space_app.py
+4. Add Environment Variables:
+   - QDRANT_API_KEY: your Qdrant Cloud API key
+   - QDRANT_URL: your Qdrant cluster URL
+   - COLLECTION: insurance_support_bot
+   - LLM_API_KEY: your Groq or OpenRouter API key
+   - LLM_BASE_URL: https://api.groq.com/openai/v1 (or OpenRouter)
+   - LLM_MODEL: e.g. llama-3.3-70b-versatile
+   - LLM_STRUCTURED_METHOD: function_calling

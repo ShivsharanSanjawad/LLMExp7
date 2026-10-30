@@ -24,6 +24,8 @@ LLM_MODEL = _str("LLM_MODEL")
 LLM_API_KEY = _str("LLM_API_KEY", "lm-studio")
 LLM_TIMEOUT_S = _float("LLM_TIMEOUT_S", 120)
 GEN_TOKENS = _int("GEN_TOKENS", 1024)
+# json_schema (LM Studio) | function_calling (most hosted providers) | json_mode
+LLM_STRUCTURED_METHOD = _str("LLM_STRUCTURED_METHOD", "json_schema")
 
 # ---- Qdrant Cloud ----
 QDRANT_URL = _str("QDRANT_URL")

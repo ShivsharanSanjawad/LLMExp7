@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: insurance-support-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python space_app.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: COLLECTION
+        value: insurance_support_bot
+      - key: LLM_STRUCTURED_METHOD
+        value: function_calling
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+

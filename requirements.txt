@@ -1,0 +1,16 @@
+# Hugging Face Space (Gradio SDK) dependencies. Local dev uses api/requirements.txt and ui/requirements.txt.
+gradio
+spaces
+python-dotenv
+pydantic>=2
+openai>=1.0,<2
+httpx
+numpy
+langchain-core
+langchain-openai
+langchain-huggingface
+langchain-qdrant
+qdrant-client
+langgraph
+sentence-transformers
+

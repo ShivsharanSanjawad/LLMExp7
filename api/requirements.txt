@@ -7,6 +7,7 @@ httpx
 langchain-core
 langchain-text-splitters
 langchain-huggingface
+langchain-openai
 langchain-qdrant
 qdrant-client
 langgraph

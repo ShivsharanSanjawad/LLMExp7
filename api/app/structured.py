@@ -53,12 +53,13 @@ class Draft(BaseModel):
 def _invoke(schema, system: str, user: str, max_tokens: int):
     """Call LLM with json_schema structured output. Raises BackendUnavailable on connection/server errors."""
     try:
-        structured = _llm(max_tokens).with_structured_output(schema, method="json_schema")
+        structured = _llm(max_tokens).with_structured_output(schema, method=config.LLM_STRUCTURED_METHOD)
         return structured.invoke([SystemMessage(system), HumanMessage(user)])
     except (APIConnectionError, APITimeoutError) as e:
         raise BackendUnavailable("llm") from e
     except APIError as e:
-        if e.status_code in (502, 503, 504):
+        if e.status_code in (401, 403, 429, 502, 503, 504):   # bad key, rate limit, provider down
+            log.warning("LLM provider returned HTTP %s", e.status_code)
             raise BackendUnavailable("llm") from e
         raise  # 400 etc. → propagate to with_retries
 
