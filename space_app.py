@@ -53,10 +53,11 @@ def get_pipeline():
                                 config.SESSION_TTL_S, config.MAX_SESSIONS)
         log.info("LangGraph pipeline successfully loaded.")
         return GRAPH, SESSIONS
-    except Exception as e:
+    except (Exception, SystemExit) as e:
         INIT_ERROR = str(e)
-        log.exception("Initialization failed: %s", e)
-        raise
+        log.error("Initialization error: %s", e)
+        print(f"CRITICAL INITIALIZATION ERROR: {e}", flush=True)
+        raise RuntimeError(str(e)) from e
 
 # ZeroGPU only accepts a Space that has at least one @spaces.GPU function. The pipeline itself needs no GPU
 # (LLM = hosted API, embeddings = CPU), so this is a never-called placeholder.
@@ -76,7 +77,7 @@ def respond(message, history, request: gr.Request):
 
     try:
         graph, sessions = get_pipeline()
-    except Exception as e:
+    except (Exception, SystemExit) as e:
         log.warning("get_pipeline error: %s", e)
         yield f"Configuration or startup issue: {e}. Please check your environment variables in Render."
         return
@@ -117,8 +118,15 @@ demo = gr.ChatInterface(
 )
 demo.queue(default_concurrency_limit=4)
 
+def _warmup():
+    try:
+        get_pipeline()
+    except (Exception, SystemExit) as e:
+        log.error("Background warmup failed: %s", e)
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
-    threading.Thread(target=get_pipeline, daemon=True).start()
+    threading.Thread(target=_warmup, daemon=True).start()
     demo.launch(server_name="0.0.0.0", server_port=port)
 
