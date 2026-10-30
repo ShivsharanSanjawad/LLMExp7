@@ -4,10 +4,12 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python space_app.py
+    startCommand: python -u space_app.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: PYTHONUNBUFFERED
+        value: "1"
       - key: COLLECTION
         value: insurance_support_bot
       - key: LLM_STRUCTURED_METHOD

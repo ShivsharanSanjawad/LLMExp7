@@ -31,12 +31,32 @@ UNAVAILABLE_MSG = "The assistant is temporarily unavailable. Please try again la
 INTERNAL_MSG = "Something went wrong. Please try again."
 SHOW_DEBUG = os.environ.get("SHOW_DEBUG", "true").lower() == "true"
 
-# ---- startup (same as the FastAPI lifespan, minus MLflow) ----
-config.check_serving_config()
-retrieval.init()
-GRAPH = build_graph()
-SESSIONS = SessionStore(config.MAX_HISTORY_MESSAGES, config.HISTORY_MSG_CHARS,
-                        config.SESSION_TTL_S, config.MAX_SESSIONS)
+import threading
+
+GRAPH = None
+SESSIONS = None
+INIT_ERROR = None
+
+
+def get_pipeline():
+    global GRAPH, SESSIONS, INIT_ERROR
+    if GRAPH is not None and SESSIONS is not None:
+        return GRAPH, SESSIONS
+    if INIT_ERROR is not None:
+        raise RuntimeError(INIT_ERROR)
+    try:
+        log.info("Checking configuration and initializing retrieval...")
+        config.check_serving_config()
+        retrieval.init()
+        GRAPH = build_graph()
+        SESSIONS = SessionStore(config.MAX_HISTORY_MESSAGES, config.HISTORY_MSG_CHARS,
+                                config.SESSION_TTL_S, config.MAX_SESSIONS)
+        log.info("LangGraph pipeline successfully loaded.")
+        return GRAPH, SESSIONS
+    except Exception as e:
+        INIT_ERROR = str(e)
+        log.exception("Initialization failed: %s", e)
+        raise
 
 # ZeroGPU only accepts a Space that has at least one @spaces.GPU function. The pipeline itself needs no GPU
 # (LLM = hosted API, embeddings = CPU), so this is a never-called placeholder.
@@ -54,11 +74,18 @@ def respond(message, history, request: gr.Request):
     message = message[:1000]
     sid = getattr(request, "session_hash", None) or uuid.uuid4().hex
 
-    initial = {"question": message, "history": SESSIONS.get_history(sid), "retry_count": 0, "path": []}
+    try:
+        graph, sessions = get_pipeline()
+    except Exception as e:
+        log.warning("get_pipeline error: %s", e)
+        yield f"Configuration or startup issue: {e}. Please check your environment variables in Render."
+        return
+
+    initial = {"question": message, "history": sessions.get_history(sid), "retry_count": 0, "path": []}
     merged = dict(initial)
     trace_lines = []
     try:
-        for chunk in GRAPH.stream(initial, stream_mode="updates"):
+        for chunk in graph.stream(initial, stream_mode="updates"):
             for name, data in chunk.items():
                 merged.update(data or {})
                 for line in describe(name, data):
@@ -74,7 +101,7 @@ def respond(message, history, request: gr.Request):
         return
 
     answer = merged.get("final_answer") or FALLBACK_MESSAGE
-    SESSIONS.add_turn(sid, mask_cards(message), answer)   # history stores masked text only
+    sessions.add_turn(sid, mask_cards(message), answer)   # history stores masked text only
     if SHOW_DEBUG and merged.get("path"):
         answer += "\n\n---\n*Pipeline: " + " -> ".join(merged["path"]) + "*"
     yield answer
@@ -92,5 +119,6 @@ demo.queue(default_concurrency_limit=4)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
+    threading.Thread(target=get_pipeline, daemon=True).start()
     demo.launch(server_name="0.0.0.0", server_port=port)
 
